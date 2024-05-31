@@ -1,0 +1,275 @@
+// imported code for project includes Media Pipe, wich was used to track the nose as someone walks across the view of a camera.
+
+// if using a computer with a webcam or built-in camera, move your head back and forth to make ripples.
+
+import {
+  PoseLandmarker,
+  FilesetResolver,
+  DrawingUtils,
+} from "https://cdn.skypack.dev/@mediapipe/tasks-vision@0.10.0";
+
+let poseLandmarker;
+let runningMode = "VIDEO";
+let video = null;
+let lastVideoTime = -1;
+let landMarks = [];
+let worldLandmarks = [];
+let captureEvent;
+let loadedCamera;
+let topBoundary, bottomBoundary;
+let xArr = [...Array(10)].fill(1300);
+let stationary = true;
+let threshold = 10;
+
+let cols;
+let rows;
+let current; // = new float[cols][rows];
+let previous; // = new float[cols][rows];
+let v = 3;
+let ripples = [];
+let newRipples = [];
+let waterImg;
+let counter = 0;
+let startTime, endTime;
+let rVal = 108;
+let gVal = 85;
+let bVal = 55;
+let intervalTime = 150;
+let waterSplash, waterSplash1, waterSplash2, waterSplashArr;
+
+let canal, brownOverlay, trash;
+
+let overlay = 0;
+let c;
+
+let minDist = 1200;
+
+// Before we can use PoseLandmarker class we must wait for it to finish
+// loading. Machine Learning models can be large and take a moment to
+// get everything needed to run.
+const createPoseLandmarker = async () => {
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+  );
+  poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
+      delegate: "GPU",
+    },
+    runningMode: runningMode,
+    numPoses: 5,
+  });
+};
+createPoseLandmarker();
+
+class Ripple {
+ constructor(x,y){
+   this.x = x;
+   this.y = y;
+   this.r = 0;
+ }
+  grow(){
+   this.r += v; 
+  }
+  
+  display(p5){
+    p5.strokeWeight(2);
+    p5.stroke(p5.color(0 + (30 * overlay / 60 + rVal * overlay / 60), 200 - (200 * overlay/ 60 - gVal * overlay / 60), 255 - (255 * overlay/ 60 - bVal / overlay / 60 * 1.5), p5.abs(p5.constrain((this.r - 255) * 0.5, -255 + (255 + (-1 * overlay / 60 * 60)), 0))));
+    p5.fill(p5.color(70 + (rVal * overlay / 60),200  - (200 * overlay / 60 - gVal * overlay / 60),255 - (255 * overlay / 60 - bVal / overlay / 60 * 1.5), 1));
+    p5.circle(this.x, this.y, this.r)
+  }
+}
+
+new p5((p5) => {
+  p5.preload = () => {
+    waterImg = p5.loadImage("water.gif");
+    waterSplash = p5.loadSound("408120-Elemental_-Water_Splash-22.wav");
+    waterSplash1 = p5.loadSound("391948-Splash-Water-Tiny-A06.wav");
+    waterSplash2 = p5.loadSound("472761-Water_Splash_Move-WE_02.wav");
+    canal = p5.loadImage("canal7.png")
+    brownOverlay = p5.loadImage("brownOverlay.png");
+    trash = p5.loadImage("polluted.png");
+    waterSplashArr = [waterSplash, waterSplash1, waterSplash2] 
+  };
+  p5.setup = () => {
+    p5.createCanvas(window.innerWidth, window.innerHeight);
+    // MAKE VIDEO
+    captureWebcam(p5);
+    topBoundary = 0;
+    bottomBoundary = p5.height - 100;
+    cols = p5.width;
+    rows = p5.height;
+    // The following line initializes a 2D cols-by-rows array with zeroes
+    // in every array cell, and is equivalent to this Processing line:
+    // current = new float[cols][rows];
+    current = new Array(cols).fill(0).map((n) => new Array(rows).fill(255));
+    previous = new Array(cols).fill(0).map((n) => new Array(rows).fill(255));
+    
+    c = p5.color(rVal, gVal, bVal);
+    startTime = p5.millis();
+  };
+
+  p5.draw = () => {
+    counter++;
+    p5.colorMode(p5.RGB, 100);
+    p5.background(255);
+    p5.blendMode(p5.BLEND)
+    p5.image(video, 0, 0, p5.width, p5.height);
+    p5.stroke(0);
+    p5.line(0, topBoundary, p5.width, topBoundary);
+    p5.line(0, bottomBoundary, p5.width, bottomBoundary);
+    // console.log(p5.random(waterSplashArr))
+    if (landMarks.length > 0) {
+      landMarks.forEach((landmark, index) => {
+        stationary = false;
+        minDist = 1200;
+        landmark.forEach((mark) => {
+          p5.noStroke();
+          p5.fill(0, 100, 100);
+          p5.circle(p5.width * mark.x, p5.height * mark.y, 10);
+        });
+        if (insideBoundary(landmark[0], p5)) {
+          p5.fill(0, 200, 200);
+          p5.circle(p5.width * landmark[0].x, p5.height * landmark[0].y, 50);
+          
+          for (let i=0; i < landMarks.length; i++) {
+            console.log(landmark[0].x * p5.width - xArr[i])
+            if (p5.abs(landmark[0].x * p5.width - xArr[i]) < threshold) {
+              stationary = true
+              
+              minDist = i;
+            } else {
+              if (p5.abs(landmark[0].x * p5.width - xArr[i]) < minDist) {
+                minDist = i;
+              }
+            } 
+          }
+          
+          if (!stationary) {
+            minDist = index;
+          }
+          
+          xArr[minDist] = landmark[0].x * p5.width;
+          
+          console.log(stationary)
+          
+          if (counter % 2 === 0 && !stationary) {
+            p5.append(ripples, new Ripple(landmark[0].x * p5.width + 20, p5.height / 2 + p5.random(-50, 50)));
+          }
+          
+          if (counter % 14 === 0 && !stationary) {
+            
+            p5.random(waterSplashArr).play()
+          }
+          if (endTime - startTime > intervalTime) {
+            overlay += 2;
+            startTime = p5.millis();
+          }
+        } 
+      });
+    } else {
+        if (endTime - startTime > intervalTime && ripples.length === 0) {
+          overlay -= 2;
+          startTime = p5.millis();
+      }
+    }
+    
+    endTime = p5.millis()
+    
+    p5.image(waterImg, 0, 0, p5.width, p5.height);
+    // p5.tint(255, 200, bVal, 255)
+    // p5.image(waterImg, 0, 0, p5.width, p5.height);
+    
+    overlay = p5.constrain(overlay, 0, 60);
+    
+    p5.push();
+    
+    
+    p5.tint(255, overlay);
+    p5.image(brownOverlay, 0, 0, p5.width, p5.height);
+    if (overlay > 30) {
+      p5.tint(255, (overlay - 30) * 2);
+      p5.image(trash, 0, 0, p5.width, p5.height);
+    }
+    
+    // p5.fill(p5.color(rVal, gVal, bVal, overlay));
+    // p5.rect(0, 0, p5.width, p5.height);
+    p5.pop();
+
+    for (let i = 0; i < ripples.length; i++) {
+      ripples[i].grow();
+    }
+    for (let i = 0; i < ripples.length; i++) {
+      ripples[i].display(p5);
+    }
+    for (let i = 0; i < ripples.length; i++) {
+      if (ripples[i].r <= 300) {
+        p5.append(newRipples, ripples[i]);
+      }
+    }
+    ripples = newRipples;
+    newRipples = [];
+    
+    p5.image(canal, 0, 0, p5.width, p5.height);
+  };
+  p5.mousePressed = () => {
+    toggleFullScreen(p5);
+  }
+});
+
+function insideBoundary(pt, p5) {
+  // console.log(pt.y * p5.height);
+  if (p5.height * pt.y > topBoundary && p5.height * pt.y < bottomBoundary) {
+    return { x: pt.x, y: pt.y };
+  }
+  return false;
+}
+
+async function predictWebcam() {
+  // Now let's start detecting the stream.
+  let startTimeMs = performance.now();
+
+  if (lastVideoTime !== video.elt.currentTime && poseLandmarker) {
+    lastVideoTime = video.elt.currentTime;
+    // console.log(poseLandmarker)
+    poseLandmarker.detectForVideo(video.elt, startTimeMs, (result) => {
+      landMarks = result.landmarks;
+      worldLandmarks = result.worldLandmarks;
+    });
+  }
+
+  // Call this function again to keep predicting when the browser is ready.
+  window.requestAnimationFrame(predictWebcam);
+}
+
+function captureWebcam(p5) {
+  video = p5.createCapture(
+    {
+      audio: false,
+      video: {
+        facingMode: "user",
+      },
+    },
+    function (stream) {
+      captureEvent = stream;
+      // do things when video ready
+      // until then, the video element will have no dimensions, or default 640x480
+      setCameraDimensions(p5);
+
+      predictWebcam();
+      // console.log(video);
+    }
+  );
+  video.elt.setAttribute("playsinline", "");
+  video.hide();
+}
+
+function setCameraDimensions(p5) {
+  loadedCamera = captureEvent.getTracks()[0].getSettings();
+  video.size(1280, 720);
+}
+
+function toggleFullScreen(p5) {
+  let fs = p5.fullscreen();
+  p5.fullscreen(!fs);
+}
